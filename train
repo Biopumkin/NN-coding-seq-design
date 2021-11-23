@@ -1,0 +1,158 @@
+import argparse
+import preData
+import genModel
+from os import path
+from tensorflow.keras import callbacks
+import tensorflow as tf
+
+gpus = tf.config.experimental.list_physical_devices('GPU')
+for i in range(len(gpus)):
+    tf.config.experimental.set_memory_growth(gpus[i], True)
+
+
+class train:
+    def __init__(self, task_name):
+        self.task_name = task_name
+
+    def Prepare_data(self, path_input, path_label, width, stride):
+        self.Dataset = None
+        self.dataset_size = int()
+        dataprepare_task = preData.preData()
+        dataprepare_task.read_PAIRS(path_input, path_label)
+        dataprepare_task.cvt_PAIRS_num().slc_PAIRS_frags(
+            width, stride).cvt_PAIRS_onehot()
+        Input = sum([[
+            onehot for pos, onehot in pep_onehots.items()
+        ] for pep_id, pep_onehots in dataprepare_task.PEPfrags_onehot.items()],
+                    [])
+        Label = sum([[
+            onehot for pos, onehot in cds_onehots.items()
+        ] for cds_id, cds_onehots in dataprepare_task.CDSfrags_onehot.items()],
+                    [])
+        self.dataset_size = len(Input)
+        assert self.dataset_size == len(Label)
+        self.Dataset = tf.data.Dataset.from_tensor_slices((Input, Label))
+        self.Inputshape = tuple(self.Dataset._structure[0].shape)
+        return self
+
+    def Split_data(self, split_scale, batch_size):
+        self.train_set, self.dev_set, self.test_set = None, None, None
+        assert (0.0 not in split_scale) and (sum(split_scale) == 1.0)
+        split_scale_num = [
+            round(portion * self.dataset_size) for portion in split_scale
+        ]
+        self.Dataset = self.Dataset.shuffle(self.dataset_size)
+        train_set = self.Dataset.take(split_scale_num[0])
+        dev_set = self.Dataset.skip(split_scale_num[0]).take(
+            split_scale_num[1])
+        test_set = self.Dataset.skip(split_scale_num[0] +
+                                     split_scale_num[1]).take(
+                                         split_scale_num[2])
+        print('\n' + len(train_set))
+        self.train_set = train_set.shuffle(
+            split_scale_num[0]).batch(batch_size)
+        self.dev_set = dev_set.batch(batch_size)
+        self.test_set = test_set.batch(batch_size)
+        return self
+
+    def Set_callback(self):
+        self.tensorboard_callback = None
+        self.checkpoint_callback = None
+        tensorboardlog_path = path.join('Tensorboard', self.task_name)
+        self.tensorboard_callback = callbacks.TensorBoard(
+            log_dir=tensorboardlog_path, histogram_freq=1)
+        checkpoint_path = path.join("Checkpoints", self.task_name)
+        checkpoint_path = path.join(checkpoint_path, "best_weights.ckpt")
+        self.checkpoint_callback = callbacks.ModelCheckpoint(
+            filepath=checkpoint_path,
+            save_weights_only=True,
+            save_best_only=True,
+            monitor='val_categorical_accuracy',
+            mode='max')
+        return self
+
+    def Compile_model(self, learning_rate):
+        self.model = None
+        self.model = genModel.standard_model(self.Inputshape)
+        self.model.summary()
+        self.model.compile(optimizer=tf.keras.optimizers.Nadam(learning_rate),
+                           loss=tf.keras.losses.categorical_crossentropy,
+                           metrics=[tf.keras.metrics.categorical_accuracy])
+        return self
+
+    def Train_model(self, epochs):
+        self.model.fit(
+            self.train_set,
+            validation_data=self.dev_set,
+            validation_freq=1,
+            epochs=epochs,
+            callbacks=[self.tensorboard_callback, self.checkpoint_callback])
+        return self
+
+    def Evaluate_model(self):
+        self.model.evaluate(self.test_set)
+        return self
+
+    def Save_model(self):
+        self.model.save('model', save_format='tf')
+        return self
+
+
+class train_task_PE(train):
+    def __init__(self, task_name):
+        super().__init__(task_name)
+
+    def Prepare_data(self, path_input, path_label, width, stride):
+        self.SIZE_dataset = int()
+        self.Dataset = None
+        dataprepare_task = preData.preData_PE()
+        dataprepare_task.read_PAIRS(path_input, path_label)
+        dataprepare_task.cvt_PAIRS_num()
+        dataprepare_task.slc_PAIRS_frags(width, stride)
+        dataprepare_task.cvt_PAIRS_onehot()
+        dataprepare_task.concat_PI()
+        Input = sum(
+            [[onehot for pos, onehot in pep_onehots.items()]
+             for pep_id, pep_onehots in dataprepare_task.PEP_onehotPE.items()],
+            [])
+        Label = sum([[
+            onehot for pos, onehot in cds_onehots.items()
+        ] for cds_id, cds_onehots in dataprepare_task.CDSfrags_onehot.items()],
+                    [])
+        self.SIZE_dataset = len(Input)
+        assert self.SIZE_dataset == len(Label)
+        self.Dataset = tf.data.Dataset.from_tensor_slices((Input, Label))
+        self.Inputshape = tuple(self.Dataset._structure[0].shape)
+        return self
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('-n', dest='task_name', type=str, required=True)
+    parser.add_argument('-i', dest='path_input', type=str, required=True)
+    parser.add_argument('-l', dest='path_label', type=str, required=True)
+    parser.add_argument('-w', dest='width', type=int, default=50)
+    parser.add_argument('-s', dest='step', type=int, default=50)
+    parser.add_argument('-p',
+                        dest='split_scale',
+                        nargs=3,
+                        type=float,
+                        default=[0.7, 0.1, 0.2])
+    parser.add_argument('-b', dest='batch_size', type=int, required=True)
+    parser.add_argument('-r', dest='learning_rate', type=float, required=True)
+    parser.add_argument('-e', dest='epochs', type=int, required=True)
+    args = parser.parse_args()
+
+    task = train_task_PE(args.task_name)
+    task.Prepare_data(args.path_input, args.path_label, args.width,
+                      args.stride)
+    task.Split_data(args.split_scale, args.batch_size)
+    task.Set_callback()
+    task.Compile_model(args.learning_rate)
+    task.Train_model(args.epochs)
+    task.Evaluate_model()
+    task.Save_model()
+
+
+if __name__ == '__main__':
+    main()
