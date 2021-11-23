@@ -1,0 +1,42 @@
+import tensorflow as tf
+from tensorflow.keras import layers
+
+
+def standard_model(input_shape):
+    initializer = 'he_uniform'
+    INPUT = tf.keras.Input(shape=input_shape)
+    BILSTM1 = layers.Bidirectional(
+        layers.LSTM(units=256,
+                    activation='tanh',
+                    return_sequences=True,
+                    kernel_initializer=initializer))(INPUT)
+    BILSTM2 = layers.Bidirectional(
+        layers.LSTM(units=192,
+                    activation='tanh',
+                    return_sequences=True,
+                    kernel_initializer=initializer))(BILSTM1)
+    ATTENTION = layers.Attention()([BILSTM2, BILSTM2])
+    MERGE = layers.Concatenate()([BILSTM2, ATTENTION])
+    DENSE1 = layers.Dense(1024,
+                          activation='relu',
+                          kernel_initializer=initializer)(MERGE)
+    NormDense1 = layers.BatchNormalization(trainable=False)(DENSE1)
+    DropDense1 = layers.Dropout(0.3)(NormDense1)
+    DENSE2 = layers.Dense(768,
+                          activation='relu',
+                          kernel_initializer=initializer)(DropDense1)
+    NormDense2 = layers.BatchNormalization(trainable=False)(DENSE2)
+    DropDense2 = layers.Dropout(0.3)(NormDense2)
+    DENSE3 = layers.Dense(512,
+                          activation='relu',
+                          kernel_initializer=initializer)(DropDense2)
+    NormDense3 = layers.BatchNormalization(trainable=False)(DENSE3)
+    DropDense3 = layers.Dropout(0.3)(NormDense3)
+    DENSE4 = layers.Dense(256,
+                          activation='relu',
+                          kernel_initializer=initializer)(DropDense3)
+    NormDense4 = layers.BatchNormalization(trainable=False)(DENSE4)
+    DropDense4 = layers.Dropout(0.3)(NormDense4)
+    OUTPUT = layers.Dense(65, activation='softmax')(DropDense4)
+    model = tf.keras.Model(inputs=[INPUT], outputs=[OUTPUT])
+    return model
