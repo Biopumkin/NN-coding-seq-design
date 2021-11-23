@@ -1,0 +1,148 @@
+import os
+import genModel
+import preData
+import numpy as np
+from Bio import SeqIO
+from Bio.Seq import Seq
+from Bio.SeqRecord import SeqRecord
+
+
+class creat_predictor:
+    def __init__(self):
+        pass
+
+    def Prepare_data(self, path_pep, width, stride):
+        prepare_task = preData.preData()
+        prepare_task.read_PEP(path_pep)
+        self.TargetPEP = prepare_task.PEP
+        prepare_task.cvt_PEP_num().slc_PEP_frags(width,
+                                                 stride).cvt_PEP_onehot()
+        self.TargetPEP_onehot = prepare_task.PEPfrags_onehot
+        self.WIDTH = width
+        self.STRIDE = stride
+        self.CodonDict = prepare_task.CodontoNum
+        return self
+
+    def Ask_model(self, model):
+        self.Outputs = dict()
+        for pep_id, pep_onehots in self.TargetPEP_onehot.items():
+            pos_set = [pos for pos in pep_onehots.keys()]
+            output_set = model.predict(
+                np.array([onehot for onehot in pep_onehots.values()]))
+            self.Outputs[pep_id] = {
+                pos_set[i]: output_set[i]
+                for i in range(len(pos_set))
+            }
+        return self
+
+    def Analyze_outputs(self):
+        self.Pred_CDS = dict()
+        for pep_id, model_outputs in self.Outputs.items():
+            Seq_length = int(len(self.TargetPEP[pep_id]))
+            pad_length = self.WIDTH + self.STRIDE * \
+                len(self.TargetPEP_onehot[pep_id]) - Seq_length
+            Seq_length = Seq_length + pad_length
+            matrix_sum = np.zeros(shape=(Seq_length, 65))
+            for pos, model_output in model_outputs.items():
+                matrix_sum[pos:pos + self.WIDTH, :] += model_output
+            self.Pred_CDS[pep_id] = ''.join([
+                self.CodonDict[codon_index]
+                for codon_index in matrix_sum.argmax(axis=1)
+            ][:-pad_length])
+        return self
+
+    def Save_fasta(self, fasta_filename):
+        SeqIO.write([
+            SeqRecord(Seq(cds[3:]),
+                      id=cds_id,
+                      description=cds_id + ' optimazation sequence')
+            if Seq(cds[3:]).translate() == self.TargetPEP[cds_id][1:] else
+            SeqRecord(Seq(cds[3:]),
+                      id=cds_id,
+                      description=cds_id + ' predicted failed!')
+            for cds_id, cds in self.Pred_CDS.items()
+        ], fasta_filename, 'fasta')
+
+
+class creat_multipredictor(creat_predictor):
+    def __init__(self):
+        super().__init__()
+        self.multimodels_Outputs = dict()
+
+    def Ask_multimodels(self, model, path_weights_packages):
+        self.multimodels_Outputs = {
+            gene_id: {}
+            for gene_id, gene_pep in self.TargetPEP.items()
+        }
+        weights_packs = sum(
+            [dirs for root, dirs, files in os.walk(path_weights_packages)], [])
+        for weights_pack in weights_packs:
+            find_weights_pack = os.path.join(path_weights_packages,
+                                             weights_pack)
+            find_weights_pack = os.path.join(find_weights_pack,
+                                             'best_weights.ckpt')
+            model.load_weights(find_weights_pack)
+            self.Ask_model(model)
+            for pep_id, outputs in self.Outputs.items():
+                self.multimodels_Outputs[pep_id][weights_pack] = outputs
+        return self
+
+    def Analyze_outputs(self):
+        self.Pred_CDS = dict()
+        self.Matrix_sums = dict()
+        for pep_id, models_outputs in self.multimodels_Outputs.items():
+            Seq_length = int(len(self.TargetPEP[pep_id]))
+            pad_length = self.WIDTH + self.STRIDE * \
+                len(self.TargetPEP_onehot[pep_id]) - Seq_length
+            Seq_length = Seq_length + pad_length
+            matrix_sum = np.zeros(shape=(Seq_length, 65))
+            for model_name, model_outputs in models_outputs.items():
+                for pos, model_output in model_outputs.items():
+                    matrix_sum[pos:pos + self.WIDTH, :] += model_output
+                self.Matrix_sums.update(
+                    {model_name: matrix_sum.argmax(axis=1)[:-pad_length]})
+            self.Pred_CDS[pep_id] = ''.join([
+                self.CodonDict[codon_index]
+                for codon_index in matrix_sum.argmax(axis=1)
+            ][:-pad_length])
+        return self
+
+
+class creat_predictor_PE(creat_predictor):
+    def __init__(self):
+        pass
+
+    def Prepare_data(self, path_pep, width, step):
+        prepare_task = preData.preData_PE()
+        prepare_task.PEP_reading(path_pep)
+        self.TargetPEP = prepare_task.PEP
+        prepare_task.PEP_to_index().PEPindex_to_frags(
+            width, step).PEPfrags_to_onehot().Concat_PE()
+        self.TargetPEP_onehots = prepare_task.PEP_onehotPE
+        self.WIDTH = width
+        self.STEP = step
+        self.CodonDict = {
+            value: key
+            for key, value in prepare_task.CodonDict.items()
+        }
+        return self
+
+
+class creat_multipredictor_PE(creat_multipredictor):
+    def __init__(self):
+        super().__init__()
+
+    def Prepare_data(self, path_pep, width, step):
+        prepare_task = preData.preData_PE()
+        prepare_task.PEP_reading(path_pep)
+        self.TargetPEP = prepare_task.PEP
+        prepare_task.PEP_to_index().PEPindex_to_frags(
+            width, step).PEPfrags_to_onehot().Concat_PE()
+        self.TargetPEP_onehots = prepare_task.PEP_onehotPE
+        self.WIDTH = width
+        self.STEP = step
+        self.CodonDict = {
+            value: key
+            for key, value in prepare_task.CodonDict.items()
+        }
+        return self
