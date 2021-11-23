@@ -1,0 +1,154 @@
+import numpy as np
+from Bio import SeqIO
+
+
+class preData:
+    def __init__(self):
+        self.AAList = [
+            '&', '*', 'A', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'K', 'L', 'M',
+            'N', 'P', 'Q', 'R', 'S', 'T', 'V', 'W', 'Y'
+        ]
+        self.AAtoNum = {aa: self.AAList.index(aa) for aa in self.AAList}
+        self.BaseList = ['T', 'C', 'A', 'G']
+        self.CodonList = [
+            first + second + third for first in self.BaseList
+            for second in self.BaseList for third in self.BaseList
+        ]
+        self.CodonList.insert(0, '&&&')
+        self.CodontoNum = {
+            codon: self.CodonList.index(codon)
+            for codon in self.CodonList
+        }
+
+    def read_PEP(self, path_pep):
+        self.PEP = dict()
+        self.PEP = {
+            pep.id: '&' + str(pep.seq)
+            for pep in SeqIO.parse(path_pep, 'fasta')
+        }
+        return self
+
+    def read_CDS(self, path_cds):
+        self.CDS = dict()
+        Termi_Codons = ['TAA', 'TGA', 'TAG']
+        self.CDS = {
+            cds.id: '&&&' + str(cds.seq) +
+            'TAA' if cds.seq[-3:] not in Termi_Codons else '&&&' + str(cds.seq)
+            for cds in SeqIO.parse(path_cds, 'fasta')
+        }
+        return self
+
+    def read_PAIRS(self, path_pep, path_cds):
+        self.read_PEP(path_pep)
+        self.read_CDS(path_cds)
+        return self
+
+    def cvt_PEP_num(self):
+        self.PEP_num = dict()
+        self.PEP_num = {
+            pep_id:
+            [self.AAtoNum[pep_seq[i]] for i in range(0, len(pep_seq), 1)]
+            for pep_id, pep_seq in self.PEP.items()
+        }
+        return self
+
+    def cvt_CDS_num(self):
+        self.CDS_num = dict()
+        self.CDS_num = {
+            cds_id: [
+                self.CodontoNum[cds_seq[i:i + 3]]
+                for i in range(0, len(cds_seq), 3)
+            ]
+            for cds_id, cds_seq in self.CDS.items()
+        }
+        return self
+
+    def cvt_PAIRS_num(self):
+        self.cvt_PEP_num()
+        self.cvt_CDS_num()
+        return self
+
+    def slc_PEP_frags(self, width, stride):
+        self.WIDTH = width
+        self.STEP = stride
+        self.PEP_frags = {
+            pep_id: {
+                i: pep_num[i:i + width] if len(
+                    pep_num[i:i + width]) == width else pep_num[i:i + width] +
+                [1 for j in range(width - len(pep_num[i:i + width]))]
+                for i in range(0, len(pep_num), stride)
+            }
+            for pep_id, pep_num in self.PEP_num.items()
+        }
+        return self
+
+    def slc_CDS_frags(self, width, stride):
+        self.WIDTH = width
+        self.STEP = stride
+        self.CDSindex_frags = {
+            cds_id: {
+                i: cds_num[i:i + width] if len(
+                    cds_num[i:i + width]) == width else cds_num[i:i + width] +
+                [11 for j in range(width - len(cds_num[i:i + width]))]
+                for i in range(0, len(cds_num), stride)
+            }
+            for cds_id, cds_num in self.CDS_num.items()
+        }
+        return self
+
+    def slc_PAIRS_frags(self, width, stride):
+        self.slc_PEP_frags(width, stride)
+        self.slc_CDS_frags(width, stride)
+        return self
+
+    def cvt_PEP_onehot(self):
+        self.PEPfrags_onehot = dict()
+        self.PEPfrags_onehot = {
+            pep_id: {pos: np.eye(22)[frag]
+                     for pos, frag in pep_frags.items()}
+            for pep_id, pep_frags in self.PEP_frags.items()
+        }
+        return self
+
+    def cvt_CDS_onehot(self):
+        self.CDSfrags_onehot = dict()
+        self.CDSfrags_onehot = {
+            cds_id: {pos: np.eye(65)[frag]
+                     for pos, frag in cds_frags.items()}
+            for cds_id, cds_frags in self.CDSindex_frags.items()
+        }
+        return self
+
+    def cvt_PAIRS_onehot(self):
+        self.cvt_PEP_onehot()
+        self.cvt_CDS_onehot()
+        return self
+
+
+class preData_PE(preData):
+    def __init__(self):
+        super().__init__()
+
+    def gen_PosIndex(self, pep_id, pos):
+        TOTAL_LEN = len(self.PEP[pep_id])
+        index_seq = np.divide(np.array(range(pos, pos + self.WIDTH)),
+                              TOTAL_LEN)
+        index_seq = index_seq[:, np.newaxis]
+        return index_seq
+
+    def concat_PI(self):
+        self.PEP_onehotPE = dict()
+        START = np.hstack(
+            (np.ones(shape=(self.WIDTH, 1)), np.zeros(shape=(self.WIDTH, 1))))
+        AFTER = np.hstack(
+            (np.zeros(shape=(self.WIDTH, 1)), np.ones(shape=(self.WIDTH, 1))))
+        self.PEP_onehotPE = {
+            pep_id: {
+                pos: np.hstack((onehot, AFTER, self.gen_PosIndex(pep_id, pos)))
+                if pos != 0 else np.hstack(
+                    (onehot, START, self.gen_PosIndex(pep_id, pos)))
+                for pos, onehot in onehots.items()
+            }
+            for pep_id, onehots in self.PEPfrags_onehot.items()
+        }
+        return self
