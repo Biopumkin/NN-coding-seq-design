@@ -2,6 +2,7 @@ import tensorflow as tf
 from tensorflow.keras import layers
 
 
+
 def standard_model(input_shape):
     initializer = 'he_uniform'
     INPUT = tf.keras.Input(shape=input_shape)
