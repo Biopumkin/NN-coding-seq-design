@@ -1,0 +1,165 @@
+import numpy as np
+from Bio import SeqIO
+
+
+class preData:
+    def __init__(self):
+        # Prepare amino acids dictionary
+        self.AATable = [
+            '&', '*', 'A', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'K', 'L', 'M',
+            'N', 'P', 'Q', 'R', 'S', 'T', 'V', 'W', 'Y'
+        ]
+        self.AADict = {aa: self.AATable.index(aa) for aa in self.AATable}
+        # Prepare codon dictionary
+        self.BaseTable = ['T', 'C', 'A', 'G']
+        self.CodonList = [
+            first + second + third for first in self.BaseTable
+            for second in self.BaseTable for third in self.BaseTable
+        ]
+        self.CodonList.insert(0, '&&&')
+        self.CodonDict = {
+            codon: self.CodonList.index(codon)
+            for codon in self.CodonList
+        }
+
+    # Reading sequence from fasta file
+    def PEP_reading(self, path_pep, Add_anchor=True):
+        self.PEP = dict()
+        self.PEP = {
+            pep.id: '&' + str(pep.seq) if Add_anchor else str(pep.seq)
+            for pep in SeqIO.parse(path_pep, 'fasta')
+        }
+        return self
+
+    def CDS_reading(self, path_cds, Add_anchor=True):
+        self.CDS = dict()
+        TCodons = ['TAA', 'TGA', 'TAG']
+        self.CDS = {
+            cds.id: '&&&' + str(cds.seq) +
+            'TAA' if Add_anchor and cds.seq[-3:] not in TCodons else '&&&' +
+            str(cds.seq)
+            if Add_anchor and cds.seq[-3:] in TCodons else str(cds.seq) + 'TAA'
+            if not Add_anchor and cds.seq[-3:] not in TCodons else str(cds.seq)
+            for cds in SeqIO.parse(path_cds, 'fasta')
+        }
+        return self
+
+    def PAIRS_reading(self, path_pep, path_cds, Add_anchor=True):
+        self.PEP_reading(path_pep, Add_anchor=Add_anchor)
+        self.CDS_reading(path_cds, Add_anchor=Add_anchor)
+        return self
+
+    # Converting sequence information from string to index according to the AADict or/and CodonDict
+    def PEP_to_index(self):
+        self.PEP_index = dict()
+        self.PEP_index = {
+            pep_id:
+            [self.AADict[pep_seq[i]] for i in range(0, len(pep_seq), 1)]
+            for pep_id, pep_seq in self.PEP.items()
+        }
+        return self
+
+    def CDS_to_index(self):
+        self.CDS_index = dict()
+        self.CDS_index = {
+            cds_id: [
+                self.CodonDict[cds_seq[i:i + 3]]
+                for i in range(0, len(cds_seq), 3)
+            ]
+            for cds_id, cds_seq in self.CDS.items()
+        }
+        return self
+
+    def PAIRS_to_index(self):
+        self.PEP_to_index()
+        self.CDS_to_index()
+        return self
+
+    # Slicing sequence into pieces according to the slice width and slice step
+    def PEPindex_to_frags(self, width, step):
+        self.WIDTH = width
+        self.STEP = step
+        self.PEPindex_frags = {
+            pep_id: {
+                i: pep_index[i:i + width] if len(pep_index[i:i + width])
+                == width else pep_index[i:i + width] +
+                [1 for i in range(width - len(pep_index[i:i + width]))]
+                for i in range(0, len(pep_index), step)
+            }
+            for pep_id, pep_index in self.PEP_index.items()
+        }
+        return self
+
+    def CDSindex_to_frags(self, width, step):
+        self.WIDTH = width
+        self.STEP = step
+        self.CDSindex_frags = {
+            cds_id: {
+                i: cds_index[i:i + width] if len(cds_index[i:i + width])
+                == width else cds_index[i:i + width] +
+                [11 for i in range(width - len(cds_index[i:i + width]))]
+                for i in range(0, len(cds_index), step)
+            }
+            for cds_id, cds_index in self.CDS_index.items()
+        }
+        return self
+
+    def PAIRSindex_to_frags(self, width, step):
+        self.PEPindex_to_frags(width, step)
+        self.CDSindex_to_frags(width, step)
+        return self
+
+    # Converting frags from index into one-hot vector
+    def PEPfrags_to_onehot(self):
+        self.PEPindexfrags_onehot = dict()
+        self.PEPindexfrags_onehot = {
+            pep_id: {pos: np.eye(22)[frag]
+                     for pos, frag in pep_frags.items()}
+            for pep_id, pep_frags in self.PEPindex_frags.items()
+        }
+        return self
+
+    def CDSfrags_to_onehot(self):
+        self.CDSindexfrags_onehot = dict()
+        self.CDSindexfrags_onehot = {
+            cds_id: {pos: np.eye(65)[frag]
+                     for pos, frag in cds_frags.items()}
+            for cds_id, cds_frags in self.CDSindex_frags.items()
+        }
+        return self
+
+    def PAIRSfrags_to_onehot(self):
+        self.PEPfrags_to_onehot()
+        self.CDSfrags_to_onehot()
+        return self
+
+
+class preData_PE(preData):
+    def __init__(self):
+        super().__init__()
+
+    def pos_index(self, pep_id, pos):
+        TOTAL_LEN = len(self.PEP[pep_id])
+        index_seq = np.divide(np.array(range(pos, pos + self.WIDTH)),
+                              TOTAL_LEN)
+        index_seq = index_seq[:, np.newaxis]
+        return index_seq
+
+    def Concat_PE(self):
+        self.PEP_onehotPE = dict()
+        LEN = {pep_id: len(pep) - 1 for pep_id, pep in self.PEP.items()}
+        START = np.hstack(
+            (np.ones(shape=(self.WIDTH, 1)), np.zeros(shape=(self.WIDTH, 1))))
+        AFTER = np.hstack(
+            (np.zeros(shape=(self.WIDTH, 1)), np.ones(shape=(self.WIDTH, 1))))
+        self.PEP_onehotPE = {
+            pep_id: {
+                pos: np.hstack(
+                    (onehot, AFTER,
+                     self.pos_index(pep_id, pos))) if pos != 0 else np.hstack(
+                         (onehot, START, self.pos_index(pep_id, pos)))
+                for pos, onehot in onehots.items()
+            }
+            for pep_id, onehots in self.PEPindexfrags_onehot.items()
+        }
+        return self
